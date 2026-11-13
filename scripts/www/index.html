@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+    <title>代码复读机</title>
+    <style>
+        body { padding: 15px; font-family: sans-serif; background: #f0f2f5; margin: 0; padding-bottom: 30px; }
+        
+        /* 控制面板按钮 */
+        .control-panel { display: flex; gap: 10px; margin-bottom: 15px; }
+        .control-panel button { flex: 1; padding: 12px 0; font-size: 14px; color: white; border: none; border-radius: 8px; font-weight: bold; }
+        .btn-play-all { background: #007bff; }
+        .btn-stop { background: #dc3545; }
+        .btn-loop { background: #6c757d; }
+        .btn-loop.active { background: #28a745; } /* 开启循环时变成绿色 */
+
+        /* 输入区 */
+        input { width: 100%; padding: 10px; margin-bottom: 10px; box-sizing: border-box; border-radius: 5px; border: 1px solid #ccc; }
+        .btn-add { width: 100%; padding: 12px; font-size: 16px; background: #ff9800; color: white; border: none; border-radius: 8px; margin-bottom: 20px;}
+        
+        /* 卡片区 */
+        .card { background: white; padding: 15px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card h3 { margin: 0 0 5px 0; color: #333; font-size: 20px; }
+        .card p { margin: 5px 0; color: #666; font-size: 14px; }
+        .card-actions { display: flex; gap: 10px; margin-top: 10px; }
+        .card-actions button { flex: 1; padding: 10px; font-size: 14px; border: none; border-radius: 5px; color: white; }
+        .btn-speak { background: #17a2b8; }
+        .btn-del { background: #dc3545; flex: 0.5; }
+    </style>
+</head>
+<body>
+
+    <!-- 顶部控制面板 -->
+    <div class="control-panel">
+        <button class="btn-play-all" onclick="playAll()">▶️ 全部播放</button>
+        <button class="btn-stop" onclick="stopPlay()">⏹️ 停止</button>
+        <button class="btn-loop" id="loopBtn" onclick="toggleLoop()">单曲循环：关</button>
+    </div>
+
+    <!-- 添加单词区 -->
+    <input type="text" id="in-en" placeholder="输入英文 (如: print)">
+    <input type="text" id="in-read" placeholder="输入读法 (如: 普润特)">
+    <input type="text" id="in-cn" placeholder="输入中文 (如: 打印)">
+    <button class="btn-add" onclick="addWord()">➕ 添加单词</button>
+
+    <!-- 列表区 -->
+    <div id="list"></div>
+
+    <script>
+        // 1. 本地存储，支持无限容量
+        var words = JSON.parse(localStorage.getItem('words_app')) || [
+            {"en": "print", "read": "普润特", "cn": "打印"},
+            {"en": "input", "read": "印扑特", "cn": "输入"}
+        ];
+        
+        // 2. 播放状态控制
+        var isPlaying = false;
+        var isLoop = false;
+        var currentIndex = 0;
+        var playTimer = null;
+
+        // 3. 渲染界面
+        function render() {
+            var box = document.getElementById('list');
+            box.innerHTML = '';
+            for(var i=0; i<words.length; i++) {
+                var w = words[i];
+                var div = document.createElement('div');
+                div.className = 'card';
+                div.innerHTML = `<h3>${w.en}</h3><p>读法：${w.read}</p><p>意思：${w.cn}</p>
+                    <div class="card-actions">
+                        <button class="btn-speak" onclick="playSingle(${i})">🔊 喇叭发音</button>
+                        <button class="btn-del" onclick="delWord(${i})">删除</button>
+                    </div>`;
+                box.appendChild(div);
+            }
+            localStorage.setItem('words_app', JSON.stringify(words));
+        }
+
+        // 4. 添加与删除
+        function addWord() {
+            var en = document.getElementById('in-en').value.trim();
+            var read = document.getElementById('in-read').value.trim() || en;
+            var cn = document.getElementById('in-cn').value.trim() || "无";
+            if(!en) return alert("请输入英文");
+            words.unshift({"en": en, "read": read, "cn": cn});
+            render();
+            document.getElementById('in-en').value = '';
+            document.getElementById('in-read').value = '';
+            document.getElementById('in-cn').value = '';
+        }
+
+        function delWord(index) {
+            if(confirm("确定删除吗？")) {
+                words.splice(index, 1);
+                render();
+            }
+        }
+
+        // 5. 切换单曲循环
+        function toggleLoop() {
+            isLoop = !isLoop;
+            var btn = document.getElementById('loopBtn');
+            if(isLoop) {
+                btn.innerText = "单曲循环：开";
+                btn.classList.add('active');
+            } else {
+                btn.innerText = "单曲循环：关";
+                btn.classList.remove('active');
+            }
+        }
+
+        // 6. 停止播放
+        function stopPlay() {
+            isPlaying = false;
+            clearTimeout(playTimer); // 清理排队
+            if(window.plus) {
+                plus.speech.stopRecognize(); // 如果存在系统底层打断
+            }
+        }
+
+        // 7. 播放单个
+        function playSingle(index) {
+            stopPlay();
+            speakWord(words[index], null);
+        }
+
+        // 8. 全部播放
+        function playAll() {
+            stopPlay();
+            isPlaying = true;
+            currentIndex = 0;
+            playNext();
+        }
+
+        // 9. 列表循环核心逻辑
+        function playNext() {
+            if(!isPlaying) return;
+            if(currentIndex >= words.length) currentIndex = 0; // 到底了重头开始
+            
+            var w = words[currentIndex];
+            
+            // 调用发声函数，读完触发回调
+            speakWord(w, function() {
+                if(isPlaying) {
+                    if(!isLoop) currentIndex++; // 如果不是单曲循环，索引+1
+                    // 等 1 秒后再读下一个，免得紧凑
+                    playTimer = setTimeout(function() {
+                        playNext();
+                    }, 1000);
+                }
+            });
+        }
+
+        // 10. 核心发声器（调用原生 TTS）
+        function speakWord(w, callback) {
+            var letters = w.en.split('').join(', ');
+            
+            // 如果是在 HBuilderX 打包的 App 里
+            if (window.plus && plus.speech) {
+                plus.speech.speak(letters, {lang: 'en-US', rate: 0.8});
+                
+                // 读单词
+                playTimer = setTimeout(function(){
+                    plus.speech.speak(w.en, {lang: 'en-US', rate: 0.9});
+                    
+                    // 读中文
+                    playTimer = setTimeout(function(){
+                        plus.speech.speak(w.cn, {lang: 'zh-CN', rate: 1.0});
+                        
+                        // 读完后触发回调（进入下一个）
+                        playTimer = setTimeout(function(){
+                            if(callback) callback();
+                        }, 1500);
+                    }, 1500);
+                }, 1500);
+                
+            } else {
+                // 电脑预览保底（如果你在电脑浏览器里预览）
+                alert("请在打包后的 App 中使用，才能听到声音！");
+                if(callback) callback();
+            }
+        }
+
+        render();
+    </script>
+</body>
+</html>
